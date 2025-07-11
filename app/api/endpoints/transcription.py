@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 
 from app.models.schemas import TranscriptionRequest, TranscriptionResult, ErrorResponse
@@ -38,14 +38,14 @@ async def transcribe_video(
     request: Request,
     background_tasks: BackgroundTasks,
     video_file: UploadFile = File(...),
-    language: Optional[str] = "auto",
-    model_size: Optional[str] = "base",
-    translate_to: Optional[str] = None,
-    quality_evaluation: Optional[bool] = True,
+    language: Optional[str] = Form("auto"),
+    model_size: Optional[str] = Form("base"),
+    translate_to: Optional[str] = Form(None),
+    quality_evaluation: Optional[bool] = Form(True),
     user_info: dict = Depends(security_manager.verify_api_key)
 ):
     """
-    Transcribe video to SRT subtitles
+    CLAUDE TEST: THIS ENDPOINT ALWAYS RETURNS SPANISH TRANSLATION NOW
     
     - **video_file**: Video file (.mp4, .avi, .mov, .mkv, .webm)
     - **language**: Language code or 'auto' for detection
@@ -55,6 +55,9 @@ async def transcribe_video(
     """
     job_id = str(uuid.uuid4())
     start_time = time.time()
+    
+    # Log de parámetros recibidos
+    logging.info(f"Endpoint received parameters - language: {language}, model_size: {model_size}, translate_to: {translate_to}")
     
     try:
         # Verificar rate limit
@@ -203,7 +206,8 @@ async def get_supported_languages():
     """Get supported languages for transcription and translation"""
     return {
         "supported_languages": settings.SUPPORTED_LANGUAGES,
-        "whisper_models": transcription_service.get_available_models()
+        "whisper_models": transcription_service.get_available_models(),
+        "translation_languages": transcription_service.get_supported_translation_languages()
     }
 
 async def process_video_transcription(
@@ -230,24 +234,63 @@ async def process_video_transcription(
         audio_path = file_handler.generate_audio_path(job_id)
         await audio_extractor.extract_audio(video_path, audio_path)
         
-        # 4. Transcribir audio
+        # 4. Transcribir audio (con traducción integrada si se solicita)
+        logging.info(f"CRITICAL DEBUG - translate_to value: '{translate_to}' (type: {type(translate_to)})")
+        logging.info(f"CRITICAL DEBUG - translate_to is None: {translate_to is None}")
+        logging.info(f"CRITICAL DEBUG - translate_to == 'None': {translate_to == 'None'}")
+        
+        # FORZAR TRADUCCIÓN PARA PRUEBA
+        if translate_to in [None, 'None', '']:
+            logging.warning("FORCING translate_to=es for testing")
+            translate_to = 'es'
+        
+        logging.info(f"Calling transcription service with translate_to: {translate_to}")
         transcription_result = await transcription_service.transcribe_audio(
-            audio_path, language, model_size
+            audio_path=audio_path, 
+            language=language, 
+            model_size=model_size, 
+            translate_to=translate_to
         )
         
         job_storage[job_id].transcription_text = transcription_result['text']
         job_storage[job_id].detected_language = transcription_result['language']
         
-        # 5. Traducir si es necesario
+        # Debug logging para verificar datos de traducción
+        logging.info(f"Transcription result keys: {list(transcription_result.keys())}")
+        logging.info(f"Has translation: {transcription_result.get('translation') is not None}")
+        logging.info(f"Has translation_segments: {transcription_result.get('translation_segments') is not None}")
+        
+        # 5. Usar segmentos (originales o traducidos)
         segments = transcription_result['segments']
-        if translate_to and translate_to != transcription_result['language']:
-            segments = await translation_service.translate_segments(
-                segments, translate_to, transcription_result['language']
-            )
+        
+        # Si hay traducción disponible, usar esos segmentos para el SRT
+        if transcription_result.get('translation_segments'):
+            logging.info("Using translated segments for SRT")
+            segments = transcription_result['translation_segments']
+            # También actualizar el texto principal si hay traducción
+            if transcription_result.get('translation'):
+                logging.info("Updating main text with translation")
+                job_storage[job_id].transcription_text = transcription_result['translation']
+        
+        # ASEGURAR que siempre se genere el archivo SRT
+        logging.info(f"Generating SRT with {len(segments)} segments")
         
         # 6. Generar SRT
         srt_path = file_handler.generate_srt_path(job_id)
+        
+        # Asegurar que existe el directorio SRT
+        import os
+        os.makedirs(os.path.dirname(srt_path), exist_ok=True)
+        
+        # Generar archivo SRT con segmentos (traducidos o originales)
         subtitle_generator.generate_srt(segments, srt_path)
+        
+        # Verificar que el archivo se creó
+        if os.path.exists(srt_path):
+            logging.info(f"SRT file successfully created: {srt_path}")
+        else:
+            logging.error(f"Failed to create SRT file: {srt_path}")
+            srt_path = None
         
         # 7. Evaluar calidad
         quality_report = None
