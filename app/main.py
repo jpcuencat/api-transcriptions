@@ -19,6 +19,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+print("*** CLAUDE DEBUG: MAIN.PY IS LOADING WITH CHANGES ***")
+print("*** THIS PROVES CODE CHANGES ARE BEING APPLIED ***")
+
 # Crear aplicación FastAPI
 app = FastAPI(
     title=settings.API_TITLE,
