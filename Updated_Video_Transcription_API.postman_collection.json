@@ -1,0 +1,208 @@
+{
+  "info": {
+    "name": "🎯 Video Transcription API - Actualizada",
+    "description": "Colección para la API de transcripción de videos, incluyendo autenticación con Bearer Token.\n\n## 🔑 Autenticación\nConfigurado como Bearer Token:\n- `Token`: dev_api_key_12345\n\n## 📋 Endpoints\n- Health Check\n- Get Supported Languages\n- Transcribe Video\n- Check Status\n- Download SRT\n- Delete Job\n\n🚀 Lista para probar todos los aspectos de la API\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "🏥 Health Check",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer dev_api_key_12345",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{BASE_URL}}/api/v1/health",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "health"
+          ]
+        },
+        "description": "Verifica que la API esté activa.\n\n**Respuesta esperada:**\n```json\n{\n  \"status\": \"degraded\",\n  \"services\": {\n    \"api\": \"running\"\n  }\n}\n```"
+      },
+      "response": []
+    },
+    {
+      "name": "🌍 Get Supported Languages",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer dev_api_key_12345",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{BASE_URL}}/api/v1/languages",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "languages"
+          ]
+        },
+        "description": "Obtiene la lista de idiomas soportados y modelos Whisper.\n\n**Respuesta esperada:**\n```json\n{\n  \"supported_languages\": {\n    \"auto\": \"Auto-detect\",\n    \"es\": \"Spanish\",\n    \"en\": \"English\"\n  },\n  \"whisper_models\": [\"tiny\", \"base\", \"small\", \"medium\", \"large\"]\n}\n```"
+      },
+      "response": []
+    },
+    {
+      "name": "🎬 Transcribe Video",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer dev_api_key_12345",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "video_file",
+              "type": "file",
+              "src": []
+            },
+            {
+              "key": "language",
+              "value": "auto",
+              "type": "text"
+            },
+            {
+              "key": "model_size",
+              "value": "base",
+              "type": "text"
+            },
+            {
+              "key": "quality_evaluation",
+              "value": "true",
+              "type": "text"
+            },
+            {
+              "key": "translate_to",
+              "value": "",
+              "type": "text",
+              "disabled": true
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/v1/transcribe",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "transcribe"
+          ]
+        },
+        "description": "Sube un video para transcripción. Configure la autenticación con Bearer Token.\n\n**Body (form-data):**\n- `video_file`: archivo de video\n- `language`: auto\n- `model_size`: base\n- `quality_evaluation`: true\n- `translate_to`: opcional"
+      },
+      "response": []
+    },
+    {
+      "name": "📊 Check Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer dev_api_key_12345",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{BASE_URL}}/api/v1/transcribe/{{job_id}}/status",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "transcribe",
+            "{{job_id}}",
+            "status"
+          ]
+        },
+        "description": "Consulta el estado del trabajo de transcripción.\n\n**Guardar job_id:**\n```javascript\npm.test('Save job_id', function () {\n    var jsonData = pm.response.json();\n    pm.environment.set('job_id', jsonData.job_id);\n});\n```"
+      },
+      "response": []
+    },
+    {
+      "name": "📥 Download SRT",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer dev_api_key_12345",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{BASE_URL}}/api/v1/transcribe/{{job_id}}/download",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "transcribe",
+            "{{job_id}}",
+            "download"
+          ]
+        },
+        "description": "Descarga el archivo SRT del trabajo completado."
+      },
+      "response": []
+    },
+    {
+      "name": "🗑️ Delete Job",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer dev_api_key_12345",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{BASE_URL}}/api/v1/transcribe/{{job_id}}",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "transcribe",
+            "{{job_id}}"
+          ]
+        },
+        "description": "Elimina un trabajo de transcripción y limpia recursos."
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost:8000",
+      "type": "string"
+    }
+  ]
+}
