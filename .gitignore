@@ -174,3 +174,8 @@ coverage/
 
 # Documentation build
 docs/_build/
+
+# Development notes and collections
+CLAUDE.md
+*.postman_collection.json
+postman_*.md
