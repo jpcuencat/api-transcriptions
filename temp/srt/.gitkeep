@@ -1,0 +1,2 @@
+# This file ensures the directory is tracked by Git
+# The temp/srt directory is used for storing generated subtitle files

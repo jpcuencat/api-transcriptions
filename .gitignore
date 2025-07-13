@@ -115,7 +115,6 @@ dmypy.json
 
 # Project specific
 # Temporary files and directories
-temp/
 media/
 *.tmp
 *.temp
@@ -162,7 +161,7 @@ uploads/
 # Model files (if large)
 *.model
 *.bin
-models/
+models/*
 
 # Backup files
 *.bak
