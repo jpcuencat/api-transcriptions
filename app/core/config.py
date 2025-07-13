@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     API_VERSION: str = "1.0.0"
     DEBUG: bool = True
     
+    # Project Base Directory
+    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -26,7 +29,7 @@ class Settings(BaseSettings):
     WHISPER_DEVICE: str = "auto"  # auto, cpu, cuda
     
     # Security
-    API_KEY: str = "dev_api_key_12345"
+    API_KEY: str = os.getenv("API_KEY", "dev_api_key_12345")  # Default solo para desarrollo
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW: int = 3600  # seconds
     

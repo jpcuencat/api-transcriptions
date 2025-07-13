@@ -162,6 +162,7 @@ uploads/
 # Model files (if large)
 *.model
 *.bin
+models/
 
 # Backup files
 *.bak

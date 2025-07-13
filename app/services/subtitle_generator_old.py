@@ -24,7 +24,7 @@ class SubtitleGenerator:
             if not segments:
                 raise Exception("No segments provided for SRT generation")
 
-            # Preparar segmentos con el texto correcto - CONSERVAR TODOS LOS SEGMENTOS
+            # Preparar segmentos con el texto correcto
             processed_segments = []
             for i, segment in enumerate(segments):
                 if use_translated and 'translation' in segment:
@@ -36,16 +36,17 @@ class SubtitleGenerator:
                     text = segment.get('text', '')
                     logging.debug(f"Using original text for segment {i}: '{text[:50]}...'")
                 
-                # CRÍTICO: Conservar TODOS los segmentos, incluso si están vacíos
-                processed_segment = {
-                    'text': text.strip() if text else '',
-                    'start': segment.get('start', 0),
-                    'end': segment.get('end', segment.get('start', 0) + 2)
-                }
-                processed_segments.append(processed_segment)
+                if text.strip():  # Solo procesar segmentos con texto
+                    processed_segment = {
+                        'text': text.strip(),
+                        'start': segment.get('start', 0),
+                        'end': segment.get('end', segment.get('start', 0) + 2)
+                    }
+                    processed_segments.append(processed_segment)
 
-            logging.info(f"Processed {len(processed_segments)} segments (preserved ALL segments)")
+            logging.info(f"Processed {len(processed_segments)} valid segments")
 
+            # Optimizar segmentos para mejor legibilidad
             # Optimizar segmentos para mejor legibilidad
             optimized_segments = self._optimize_segments(processed_segments)
 
@@ -186,10 +187,28 @@ class SubtitleGenerator:
             valid_sentences = [text.strip()]
         
         return valid_sentences
+
+            # Formatear como SRT
+            srt_content = self._format_srt(optimized_segments)
+
+            # Guardar archivo
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(srt_content)
+
+            logging.info(f"SRT file generated successfully: {output_path} with {len(optimized_segments)} subtitles")
+            return output_path
+
+        except ValueError as ve:
+            logging.error(f"Value error: {ve}")
+            raise
+        except Exception as e:
+            logging.error(f"SRT generation error: {e}")
+            raise Exception(f"SRT generation failed: {e}")
     
     def _optimize_segments(self, segments: List[Dict]) -> List[Dict]:
-        """Optimiza segmentos manteniendo tiempos originales de Whisper"""
-        logging.info(f"Optimizing {len(segments)} segments - PRESERVING WHISPER TIMING")
+        """Optimiza segmentos manteniendo TODOS los segmentos originales de Whisper"""
+        logging.info(f"Optimizing {len(segments)} segments - PRESERVING ALL SEGMENTS")
         optimized = []
         
         for i, segment in enumerate(segments):
@@ -197,26 +216,40 @@ class SubtitleGenerator:
             start = segment.get('start', 0)
             end = segment.get('end', start + 1.0)
             
-            # Mantener timing original de Whisper, solo dividir texto largo en líneas
+            # CRÍTICO: Conservar TODOS los segmentos, incluso los vacíos
+            if not text:
+                logging.debug(f"Preserving empty segment {i}: start={start}, end={end}")
+                # Crear un segmento vacío pero válido para mantener la estructura temporal
+                optimized.append({
+                    'text': "",  # Segmento vacío
+                    'start': start,
+                    'end': end
+                })
+                continue
+                
+            # Para segmentos con texto, mantener timing original de Whisper
             if end <= start:
                 end = start + 1.0  # Asegurar duración mínima
             
-            logging.debug(f"Processing segment {i}: start={start:.2f}, end={end:.2f}, text='{text[:50]}...'")
+            logging.debug(f"Processing segment {i}: start={start}, end={end}, text='{text[:50]}...'")
             
-            # Dividir texto largo en líneas apropiadas para subtítulos
-            if text:
-                lines = self._split_text_into_lines(text)
-                final_text = '\n'.join(lines)
-            else:
-                final_text = ""
+            # Dividir texto largo pero mantener como un solo subtítulo para conservar timing
+            lines = self._split_text_into_lines(text)
             
             optimized.append({
-                'text': final_text,
+                'text': '\n'.join(lines),
                 'start': start,
                 'end': end
             })
         
-        logging.info(f"Segment optimization complete: {len(segments)} segments -> {len(optimized)} optimized")
+        logging.info(f"Segment optimization complete: {len(segments)} original -> {len(optimized)} optimized (PRESERVED ALL)")
+        
+        # Verificación final: asegurar que tenemos el mismo número de segmentos
+        if len(optimized) != len(segments):
+            logging.error(f"SEGMENT LOSS DETECTED! Original: {len(segments)}, Optimized: {len(optimized)}")
+            # En caso de discrepancia, usar los segmentos originales
+            return segments
+        
         return optimized
     
     def _split_text_into_lines(self, text: str) -> List[str]:
@@ -256,23 +289,17 @@ class SubtitleGenerator:
         return lines
     
     def _format_srt(self, segments: List[Dict]) -> str:
-        """Formatea segmentos como SRT, omitiendo segmentos vacíos pero preservando tiempos"""
+        """Formatea segmentos como SRT"""
         srt_content = ""
-        subtitle_number = 1
         
-        for segment in segments:
-            text = segment['text'].strip()
+        for i, segment in enumerate(segments, 1):
+            start_time = self._seconds_to_srt_time(segment['start'])
+            end_time = self._seconds_to_srt_time(segment['end'])
+            text = segment['text']
             
-            # Solo incluir segmentos con texto en el archivo SRT
-            if text:
-                start_time = self._seconds_to_srt_time(segment['start'])
-                end_time = self._seconds_to_srt_time(segment['end'])
-                
-                srt_content += f"{subtitle_number}\n"
-                srt_content += f"{start_time} --> {end_time}\n"
-                srt_content += f"{text}\n\n"
-                
-                subtitle_number += 1
+            srt_content += f"{i}\n"
+            srt_content += f"{start_time} --> {end_time}\n"
+            srt_content += f"{text}\n\n"
         
         return srt_content.strip()
     

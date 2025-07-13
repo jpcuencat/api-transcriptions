@@ -41,8 +41,10 @@ class TranscriptionResult(BaseModel):
     status: str
     video_info: Optional[VideoInfo] = None
     transcription_text: Optional[str] = None
+    translation_text: Optional[str] = None
     detected_language: Optional[str] = None
     segments: Optional[List[TranscriptionSegment]] = None
+    translation_segments: Optional[List[TranscriptionSegment]] = None
     quality_report: Optional[QualityReport] = None
     srt_file_path: Optional[str] = None
     processing_time: Optional[float] = None
