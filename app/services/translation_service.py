@@ -136,22 +136,7 @@ class TranslationService:
             logging.error(f"Translation error: {e}")
             raise Exception(f"Translation failed: {e}")
     
-    async def translate_text(self, text: str, target_language: str, source_language: str = 'auto') -> str:
-        """Traduce un texto simple"""
-        try:
-            if not text.strip():
-                return text
-            
-            translator = GoogleTranslator(
-                source=source_language,
-                target=target_language
-            )
-            
-            return translator.translate(text)
-            
-        except Exception as e:
-            logging.error(f"Text translation error: {e}")
-            return text  # Retornar texto original si falla
+
     
     def get_supported_languages(self) -> Dict[str, str]:
         """Retorna idiomas soportados"""

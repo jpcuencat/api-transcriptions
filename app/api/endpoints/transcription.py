@@ -5,10 +5,13 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks, Request, Body
 from fastapi.responses import FileResponse
 
-from app.models.schemas import TranscriptionRequest, TranscriptionResult, ErrorResponse
+from app.models.schemas import (
+    TranscriptionRequest, TranscriptionResult, ErrorResponse,
+    URLTranscriptionRequest, URLValidationResult, VideoUrlInfo
+)
 from app.utils.validators import FileValidator
 from app.utils.file_handler import FileHandler
 from app.services.audio_extractor import AudioExtractor
@@ -16,6 +19,7 @@ from app.services.transcription_service import TranscriptionService
 from app.services.subtitle_generator import SubtitleGenerator
 from app.services.quality_evaluator import QualityEvaluator
 from app.services.translation_service import TranslationService
+from app.services.video_downloader import VideoDownloaderService
 from app.core.security import security_manager
 from app.core.config import settings
 
@@ -29,6 +33,7 @@ transcription_service = TranscriptionService()
 subtitle_generator = SubtitleGenerator()
 quality_evaluator = QualityEvaluator()
 translation_service = TranslationService()
+video_downloader = VideoDownloaderService()
 
 # Almacenamiento simple en memoria para el estado de trabajos (en producción usar base de datos)
 job_storage: dict = {}
@@ -165,7 +170,7 @@ async def get_transcription_status(
         "status": job.status,
         "video_info": job.video_info,
         "transcription_text": job.transcription_text,
-        "translation_text": job.translation_text,
+        "translated_text": job.translated_text,
         "detected_language": job.detected_language,
         "processing_time": job.processing_time,
         "created_at": job.created_at,
@@ -291,12 +296,181 @@ async def get_translation_providers(
                 "fallback": "google"
             }
         }
+    except ImportError as e:
+        logging.warning(f"Missing dependency for translation providers: {e}")
+        return {
+            "error": "Translation providers unavailable",
+            "detail": f"Missing required dependency: {str(e)}. Please install with: pip install aiohttp",
+            "fallback_available": True,
+            "message": "Basic translation functionality is still available through the main transcription endpoints"
+        }
     except Exception as e:
         logging.error(f"Error getting translation providers: {e}")
         return {
             "error": "Failed to get translation providers",
-            "detail": str(e)
+            "detail": str(e),
+            "fallback_available": True,
+            "message": "Basic translation functionality is still available through the main transcription endpoints"
         }
+
+@router.post("/transcribe-url/validate")
+async def validate_video_url(
+    request: URLTranscriptionRequest = Body(...),
+    user_info: dict = Depends(security_manager.verify_api_key)
+):
+    """Validate video URL and get video information"""
+    try:
+        validation_result = video_downloader.validate_url_accessibility(request.url)
+        
+        if not validation_result['valid']:
+            return URLValidationResult(
+                valid=False,
+                accessible=False,
+                errors=validation_result['errors'],
+                warnings=validation_result['warnings']
+            )
+        
+        # Crear objeto VideoUrlInfo
+        video_info = VideoUrlInfo(
+            title=validation_result['title'],
+            duration=validation_result['duration'],
+            uploader=validation_result.get('uploader', 'Unknown'),
+            upload_date=validation_result.get('upload_date', 'Unknown'),
+            description=validation_result.get('description', ''),
+            thumbnail=validation_result.get('thumbnail'),
+            webpage_url=validation_result.get('webpage_url', request.url),
+            extractor=validation_result['extractor'],
+            has_audio=validation_result['has_audio'],
+            has_video=validation_result['has_video']
+        )
+        
+        return URLValidationResult(
+            valid=True,
+            accessible=True,
+            video_info=video_info,
+            warnings=validation_result['warnings'],
+            errors=validation_result['errors']
+        )
+        
+    except Exception as e:
+        logging.error(f"Error validating URL {request.url}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "URL Validation Failed",
+                "detail": str(e),
+                "error_code": "URL_VALIDATION_ERROR",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+@router.post("/transcribe-url", response_model=TranscriptionResult)
+async def transcribe_video_from_url(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    transcription_request: URLTranscriptionRequest = Body(...),
+    user_info: dict = Depends(security_manager.verify_api_key)
+):
+    """
+    Transcribe video from URL and optionally translate to target language
+    
+    - **url**: Video URL (YouTube, Vimeo, etc.)
+    - **language**: Language code or 'auto' for detection
+    - **model_size**: Whisper model size (tiny, base, small, medium, large)
+    - **translate_to**: Target language for translation (optional)
+    - **quality_evaluation**: Enable quality evaluation (default: true)
+    - **video_quality**: Download quality (low, medium, best)
+    """
+    job_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    try:
+        # Verificar rate limit
+        await security_manager.check_rate_limit(request)
+        
+        # Validar parámetros
+        if transcription_request.language not in settings.SUPPORTED_LANGUAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported language: {transcription_request.language}. Supported: {list(settings.SUPPORTED_LANGUAGES.keys())}"
+            )
+        
+        if transcription_request.model_size not in transcription_service.get_available_models():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model size: {transcription_request.model_size}. Available: {transcription_service.get_available_models()}"
+            )
+        
+        # Validar parámetros de traducción
+        if (transcription_request.translate_to is not None and 
+            transcription_request.translate_to.strip() and
+            transcription_request.translate_to.strip() != "" and 
+            transcription_request.translate_to not in settings.SUPPORTED_LANGUAGES):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported translation target: {transcription_request.translate_to}. Supported: {list(settings.SUPPORTED_LANGUAGES.keys())}"
+            )
+        
+        # Validar URL
+        validation_result = video_downloader.validate_url_accessibility(transcription_request.url)
+        if not validation_result['valid']:
+            error_details = {
+                "error": "URL Validation Failed",
+                "detail": "The provided URL is not accessible or valid",
+                "validation_errors": validation_result['errors'],
+                "warnings": validation_result['warnings'],
+                "timestamp": datetime.now().isoformat()
+            }
+            raise HTTPException(status_code=422, detail=error_details)
+        
+        # Log warnings if any
+        if validation_result['warnings']:
+            logging.warning(f"URL validation warnings for {transcription_request.url}: {validation_result['warnings']}")
+        
+        # Crear entrada de trabajo para URL
+        job_storage[job_id] = TranscriptionResult(
+            job_id=job_id,
+            status="processing",
+            source_type="url",
+            source_url=transcription_request.url,
+            created_at=datetime.now()
+        )
+        
+        logging.info(f"Starting URL transcription job {job_id} for user {user_info.get('name')} - URL: {transcription_request.url}")
+        
+        # Procesar en background
+        background_tasks.add_task(
+            process_url_video_transcription,
+            job_id=job_id,
+            transcription_request=transcription_request,
+            start_time=start_time
+        )
+        
+        return job_storage[job_id]
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error starting URL transcription job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal Server Error",
+                "detail": f"Failed to start URL transcription: {str(e)}",
+                "error_code": "PROCESSING_ERROR",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
+@router.get("/video-downloader/supported-sites")
+async def get_supported_sites():
+    """Get list of supported video sites"""
+    return {
+        "supported_sites": video_downloader.get_supported_sites(),
+        "total_count": len(video_downloader.get_supported_sites()),
+        "note": "This is a selection of popular sites. yt-dlp supports many more sites.",
+        "documentation": "https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md"
+    }
 
 async def process_video_transcription(
     job_id: str,
@@ -352,7 +526,7 @@ async def process_video_transcription(
         if transcription_result.get('translation'):
             logging.info("Translation found. Updating main text with translation")
             job_storage[job_id].transcription_text = transcription_result['translation']
-            job_storage[job_id].translation_text = transcription_result['translation']
+            job_storage[job_id].translated_text = transcription_result['translation']
             use_translated = True
             
         if transcription_result.get('translation_segments'):
@@ -391,6 +565,8 @@ async def process_video_transcription(
             if 'start' in seg and 'end' in seg and 'text' in seg:
                 # Para segmentos traducidos, usar el texto traducido
                 text_to_use = seg.get('translation', seg.get('text', ''))
+                if text_to_use is None:
+                    text_to_use = ''
                 
                 valid_segment = {
                     'start': seg['start'],
@@ -481,3 +657,265 @@ async def process_video_transcription(
         # Limpiar archivos en caso de error
         file_handler.cleanup_job_files(job_id)
         raise
+
+async def process_url_video_transcription(
+    job_id: str,
+    transcription_request: URLTranscriptionRequest, 
+    start_time: float
+):
+    """Procesa transcripción de video desde URL de manera asíncrona"""
+    downloaded_file_path = None
+    try:
+        logging.info(f"Starting URL video processing for job {job_id}")
+        
+        # 1. Descargar video desde URL
+        download_result = await video_downloader.download_video(
+            transcription_request.url,
+            quality=transcription_request.video_quality,
+            job_id=job_id
+        )
+        
+        if not download_result['success']:
+            raise Exception(f"Video download failed: {download_result['error']}")
+        
+        downloaded_file_path = download_result['file_path']
+        job_storage[job_id].source_filename = os.path.basename(downloaded_file_path)
+        
+        logging.info(f"Video downloaded successfully for job {job_id}: {downloaded_file_path}")
+        
+        # 2. Extraer audio
+        audio_path = file_handler.generate_audio_path(job_id)
+        await audio_extractor.extract_audio(downloaded_file_path, audio_path)
+        
+        logging.info(f"Audio extracted for job {job_id}: {audio_path}")
+        
+        # 3. Obtener información del video
+        video_info_dict = audio_extractor.get_video_info(downloaded_file_path)
+        job_storage[job_id].duration = video_info_dict.get('duration', 0)
+        
+        # 4. Transcribir
+        transcription_result = await transcription_service.transcribe_audio(
+            audio_path, 
+            transcription_request.language, 
+            transcription_request.model_size
+        )
+        
+        # Debug: Verificar el tipo y contenido de transcription_result
+        logging.info(f"Transcription result type: {type(transcription_result)}")
+        
+        # Registrar solo información básica para evitar problemas de encoding
+        if isinstance(transcription_result, dict):
+            text_preview = str(transcription_result.get('text', ''))[:100] if transcription_result.get('text') else 'No text'
+            # Escapar caracteres Unicode problemáticos
+            text_preview = text_preview.encode('ascii', 'ignore').decode('ascii')
+            logging.info(f"Transcription text preview (first 100 chars): {text_preview}...")
+            logging.info(f"Language detected: {transcription_result.get('language', 'unknown')}")
+            logging.info(f"Segments count: {len(transcription_result.get('segments', []))}")
+            logging.info(f"Has translation: {transcription_result.get('translation') is not None}")
+        else:
+            logging.info(f"Transcription result is not a dict: {type(transcription_result)}")
+        
+        if not transcription_result:
+            raise Exception("Transcription failed")
+        
+        # Verificar que es un diccionario antes de acceder a sus elementos
+        if not isinstance(transcription_result, dict):
+            raise Exception(f"Expected dict from transcription service, got {type(transcription_result)}: {transcription_result}")
+        
+        job_storage[job_id].language = transcription_result.get('language', transcription_request.language)
+        job_storage[job_id].model_used = transcription_request.model_size
+        
+        # Agregar texto de transcripción principal
+        if 'text' in transcription_result:
+            job_storage[job_id].transcription_text = transcription_result['text']
+            logging.info("Main transcription text assigned successfully")
+        else:
+            logging.error(f"No 'text' key in transcription_result. Keys: {list(transcription_result.keys())}")
+        
+        # 5. Traducir si es necesario
+        translated_text = None
+        translation_segments = None
+        if (transcription_request.translate_to and 
+            transcription_request.translate_to.strip() and 
+            transcription_request.translate_to.strip() != "" and 
+            transcription_request.translate_to != transcription_result.get('language')):
+            
+            # Verificar que 'text' existe en transcription_result
+            if 'text' not in transcription_result:
+                raise Exception(f"'text' key missing from transcription_result. Available keys: {list(transcription_result.keys())}")
+            
+            translated_text = await translation_service.translate_text(
+                transcription_result['text'], 
+                source_language=transcription_result.get('language', 'auto'),
+                target_language=transcription_request.translate_to
+            )
+            
+            # Traducir segmentos si están disponibles
+            if transcription_result.get('segments'):
+                # Verificar que 'segments' es una lista
+                if not isinstance(transcription_result['segments'], list):
+                    raise Exception(f"Expected list for 'segments', got {type(transcription_result['segments'])}")
+                
+                translation_segments = await translation_service.translate_segments(
+                    transcription_result['segments'],
+                    target_language=transcription_request.translate_to,
+                    source_language=transcription_result.get('language', 'auto')
+                )
+                transcription_result['translation_segments'] = translation_segments
+            
+            job_storage[job_id].translated_text = translated_text
+            job_storage[job_id].target_language = transcription_request.translate_to
+        
+        # 6. Generar SRT
+        srt_path = None
+        if transcription_result.get('segments'):
+            logging.info(f"Found {len(transcription_result['segments'])} segments for SRT generation")
+            srt_filename = f"{job_id}.srt"
+            srt_path = os.path.join(settings.SRT_TEMP_DIR, srt_filename)
+            
+            # Determinar qué segmentos usar para SRT
+            use_translated = (translation_segments is not None and 
+                            transcription_request.translate_to and 
+                            transcription_request.translate_to.strip() and
+                            transcription_request.translate_to.strip() != "")
+            segments_to_use = translation_segments if use_translated else transcription_result['segments']
+            
+            logging.info(f"Using translated segments: {use_translated}")
+            logging.info(f"Segments to use type: {type(segments_to_use)}")
+            logging.info(f"Number of segments to use: {len(segments_to_use) if segments_to_use else 0}")
+            
+            # Verificar que los segmentos tienen los campos necesarios
+            valid_segments = []
+            for i, seg in enumerate(segments_to_use):
+                if i < 3:  # Solo debug para los primeros 3 segmentos
+                    seg_text = str(seg.get('text', ''))[:30] if isinstance(seg, dict) else 'Invalid segment'
+                    # Escapar caracteres Unicode problemáticos para logging
+                    seg_text_safe = seg_text.encode('ascii', 'ignore').decode('ascii')
+                    logging.debug(f"Processing segment {i}: type={type(seg)}, text_preview='{seg_text_safe}...'")
+                
+                if isinstance(seg, dict) and 'start' in seg and 'end' in seg and 'text' in seg:
+                    text_to_use = seg.get('translation', seg.get('text', ''))
+                    if text_to_use is None:
+                        text_to_use = ''
+                    valid_segment = {
+                        'start': seg['start'],
+                        'end': seg['end'],
+                        'text': text_to_use.strip(),
+                        'translation': text_to_use.strip() if use_translated else None
+                    }
+                    valid_segments.append(valid_segment)
+                else:
+                    logging.warning(f"Skipping invalid segment {i}: type={type(seg)}, missing required fields or not a dict")
+            
+            logging.info(f"Processing {len(valid_segments)} valid segments for SRT generation")
+            
+            # Generar SRT
+            try:
+                srt_path = subtitle_generator.generate_srt(valid_segments, srt_path, use_translated=use_translated)
+                logging.info(f"SRT generated successfully: {srt_path}")
+            except Exception as srt_error:
+                logging.error(f"Error generating SRT: {srt_error}")
+                srt_path = None
+        
+        job_storage[job_id].srt_file_path = srt_path
+        
+        # Limpiar segmentos para la respuesta
+        try:
+            if transcription_result.get('translation_segments'):
+                logging.info("Cleaning translation_segments for response")
+                from app.models.schemas import TranscriptionSegment
+                cleaned_segments = []
+                for i, seg in enumerate(transcription_result['translation_segments'][:5]):
+                    if i < 3:  # Solo debug para los primeros 3 segmentos
+                        seg_text = str(seg.get('text', ''))[:20] if isinstance(seg, dict) else 'Invalid'
+                        seg_text_safe = seg_text.encode('ascii', 'ignore').decode('ascii')
+                        logging.debug(f"Cleaning translation segment {i}: type={type(seg)}, text='{seg_text_safe}...'")
+                    
+                    if isinstance(seg, dict) and 'start' in seg and 'end' in seg and 'text' in seg:
+                        cleaned_segment = TranscriptionSegment(
+                            id=seg.get('id', 0),
+                            start=seg['start'],
+                            end=seg['end'],
+                            text=seg.get('translation', seg.get('text', '')),
+                            confidence=seg.get('confidence', 0.8)
+                        )
+                        cleaned_segments.append(cleaned_segment)
+                    else:
+                        logging.warning(f"Skipping invalid translation segment {i}: type={type(seg)}")
+                job_storage[job_id].translation_segments = cleaned_segments
+                logging.info(f"Cleaned {len(cleaned_segments)} translation segments")
+            
+            if transcription_result.get('segments'):
+                logging.info("Cleaning original segments for response")
+                from app.models.schemas import TranscriptionSegment
+                cleaned_original_segments = []
+                for i, seg in enumerate(transcription_result['segments'][:5]):
+                    if i < 3:  # Solo debug para los primeros 3 segmentos
+                        seg_text = str(seg.get('text', ''))[:20] if isinstance(seg, dict) else 'Invalid'
+                        seg_text_safe = seg_text.encode('ascii', 'ignore').decode('ascii')
+                        logging.debug(f"Cleaning original segment {i}: type={type(seg)}, text='{seg_text_safe}...'")
+                    
+                    if isinstance(seg, dict) and 'start' in seg and 'end' in seg and 'text' in seg:
+                        cleaned_segment = TranscriptionSegment(
+                            id=seg.get('id', 0),
+                            start=seg['start'],
+                            end=seg['end'],
+                            text=seg.get('text', ''),
+                            confidence=seg.get('confidence', 0.8)
+                        )
+                        cleaned_original_segments.append(cleaned_segment)
+                    else:
+                        logging.warning(f"Skipping invalid original segment {i}: type={type(seg)}")
+                job_storage[job_id].segments = cleaned_original_segments
+                logging.info(f"Cleaned {len(cleaned_original_segments)} original segments")
+        except Exception as cleanup_error:
+            logging.error(f"Error cleaning segments for response: {cleanup_error}")
+            # Continuar sin segmentos limpios en caso de error
+            job_storage[job_id].translation_segments = []
+            job_storage[job_id].segments = []
+        
+        # 7. Evaluar calidad
+        quality_report = None
+        if transcription_request.quality_evaluation:
+            quality_report = quality_evaluator.evaluate_transcription(
+                transcription_result, video_info_dict.get('duration', 0)
+            )
+        
+        # 8. Actualizar resultado
+        processing_time = time.time() - start_time
+        
+        job_storage[job_id].status = "completed"
+        job_storage[job_id].quality_report = quality_report
+        job_storage[job_id].processing_time = processing_time
+        job_storage[job_id].completed_at = datetime.now()
+        
+        # Limpiar archivos temporales
+        file_handler.cleanup_job_files(job_id)
+        
+        # Limpiar archivo descargado si existe
+        if downloaded_file_path and os.path.exists(downloaded_file_path):
+            try:
+                os.remove(downloaded_file_path)
+                logging.info(f"Downloaded file cleaned up: {downloaded_file_path}")
+            except Exception as cleanup_error:
+                logging.warning(f"Failed to clean up downloaded file {downloaded_file_path}: {cleanup_error}")
+        
+        logging.info(f"URL transcription job {job_id} completed successfully")
+        
+    except Exception as e:
+        logging.error(f"URL job {job_id} failed: {e}")
+        job_storage[job_id].status = "failed"
+        job_storage[job_id].error = str(e)
+        job_storage[job_id].completed_at = datetime.now()
+        
+        # Limpiar archivos en caso de error
+        file_handler.cleanup_job_files(job_id)
+        
+        # Limpiar archivo descargado si existe
+        if downloaded_file_path and os.path.exists(downloaded_file_path):
+            try:
+                os.remove(downloaded_file_path)
+                logging.info(f"Downloaded file cleaned up after error: {downloaded_file_path}")
+            except Exception as cleanup_error:
+                logging.warning(f"Failed to clean up downloaded file {downloaded_file_path}: {cleanup_error}")
+

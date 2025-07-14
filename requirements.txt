@@ -5,6 +5,7 @@ uvicorn
 # Audio/Video Processing
 transformers
 whisper
+yt-dlp
 
 # Data Validation
 pydantic==2.5.0
@@ -12,7 +13,9 @@ pydantic-settings==2.1.0
 
 # File Handling
 aiofiles==23.2.1
-python-magic==0.4.27
+
+# HTTP Client for translations
+aiohttp
 
 # Quality Assessment
 jiwer

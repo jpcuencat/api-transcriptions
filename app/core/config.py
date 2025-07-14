@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # File Processing
     MAX_FILE_SIZE_MB: int = 500
     TEMP_DIR: str = "./temp"
+    SRT_TEMP_DIR: str = "./temp/srt"
     ALLOWED_EXTENSIONS: list = [".mp4", ".avi", ".mov", ".mkv", ".webm"]
     CLEANUP_TEMP_FILES: bool = True
     

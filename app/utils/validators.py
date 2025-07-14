@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import os
-import magic
+import mimetypes
 
 class FileValidator:
     """Validador robusto de archivos con manejo mejorado de edge cases."""
@@ -67,7 +67,7 @@ class FileValidator:
     @staticmethod
     def validate_file_type(file_path: str) -> bool:
         """
-        Valida el tipo MIME del archivo.
+        Valida el tipo MIME del archivo usando mimetypes (más compatible).
         
         Args:
             file_path: Ruta al archivo
@@ -79,8 +79,14 @@ class FileValidator:
             if not os.path.exists(file_path):
                 return False
             
-            mime = magic.Magic(mime=True)
-            file_type = mime.from_file(file_path)
+            # Usar mimetypes que es más estable y no requiere libmagic
+            file_type, _ = mimetypes.guess_type(file_path)
+            
+            if not file_type:
+                # Fallback: verificar por extensión
+                ext = os.path.splitext(file_path)[1].lower()
+                video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.wmv', '.m4v', '.flv']
+                return ext in video_extensions
             
             video_types = [
                 'video/mp4', 
@@ -94,7 +100,13 @@ class FileValidator:
             
             return file_type in video_types
         except Exception:
-            return False
+            # Fallback: verificar por extensión si falla todo lo demás
+            try:
+                ext = os.path.splitext(file_path)[1].lower()
+                video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.wmv', '.m4v', '.flv']
+                return ext in video_extensions
+            except:
+                return False
     
     @staticmethod
     def validate_filename_security(filename: str) -> bool:
