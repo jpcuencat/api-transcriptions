@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Final - WAV Real</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .start { background-color: #4CAF50; color: white; }
+        .stop { background-color: #f44336; color: white; }
+        .logs {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        .results {
+            background: #e7f3ff;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .alert {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Final - Transcripción Real</h1>
+        
+        <div class="alert">
+            <strong>🎤 IMPORTANTE:</strong> 
+            <ul>
+                <li>Habla MUY CLARO y FUERTE</li>
+                <li>Di frases completas como "Hola, mi nombre es Juan"</li>
+                <li>Mantén 5-10 segundos de audio continuo</li>
+                <li>El micrófono debe estar cerca de tu boca</li>
+            </ul>
+        </div>
+        
+        <div>
+            <button id="createSession" class="start">1. Crear Sesión</button>
+            <button id="connectWS" class="start" disabled>2. Conectar WebSocket</button>
+            <button id="startRecord" class="start" disabled>3. Grabar 10 segundos</button>
+            <button id="stopRecord" class="stop" disabled>4. Detener</button>
+        </div>
+
+        <div>
+            <strong>Session ID:</strong> <span id="sessionId">No creada</span><br>
+            <strong>WebSocket:</strong> <span id="wsStatus">Desconectado</span><br>
+            <strong>Grabación:</strong> <span id="recStatus">Detenida</span><br>
+            <strong>Tiempo:</strong> <span id="timeCounter">0s</span>
+        </div>
+
+        <div class="logs" id="logs">
+            [LOG] Test final con WAV real...
+        </div>
+
+        <div class="results" id="results">
+            <strong>Transcripciones:</strong><br>
+            <div id="transcriptions">Esperando audio real...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1';
+        const WS_BASE = 'ws://localhost:8000/api/v1';
+        
+        let sessionId = null;
+        let websocket = null;
+        let mediaRecorder = null;
+        let recordingTimer = null;
+        let secondsRecorded = 0;
+
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(message);
+        }
+
+        function addTranscription(text, translation = null) {
+            const div = document.getElementById('transcriptions');
+            const timestamp = new Date().toLocaleTimeString();
+            div.innerHTML += `<div><strong>[${timestamp}]</strong> ${text}`;
+            if (translation) {
+                div.innerHTML += `<br><em>Traducción: ${translation}</em>`;
+            }
+            div.innerHTML += `</div><br>`;
+        }
+
+        // 1. Crear Sesión
+        document.getElementById('createSession').onclick = async () => {
+            try {
+                log('Creando sesión...');
+                const response = await fetch(`${API_BASE}/realtime/create-session`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        language: 'es',
+                        model_size: 'base',  // Usar modelo más grande
+                        translate_to: 'en'
+                    })
+                });
+                
+                const session = await response.json();
+                sessionId = session.session_id;
+                
+                document.getElementById('sessionId').textContent = sessionId;
+                document.getElementById('createSession').disabled = true;
+                document.getElementById('connectWS').disabled = false;
+                
+                log(`✅ Sesión creada: ${sessionId}`);
+            } catch (error) {
+                log(`❌ Error creando sesión: ${error}`);
+            }
+        };
+
+        // 2. Conectar WebSocket
+        document.getElementById('connectWS').onclick = () => {
+            try {
+                log('Conectando WebSocket...');
+                websocket = new WebSocket(`${WS_BASE}/realtime/ws/${sessionId}`);
+                
+                websocket.onopen = () => {
+                    log('✅ WebSocket conectado');
+                    document.getElementById('wsStatus').textContent = 'Conectado';
+                    document.getElementById('connectWS').disabled = true;
+                    document.getElementById('startRecord').disabled = false;
+                };
+                
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 Mensaje: ${data.type}`);
+                    
+                    if (data.type === 'transcription') {
+                        log(`📝 Transcripción recibida: "${data.transcription}"`);
+                        if (data.transcription && data.transcription.trim()) {
+                            addTranscription(data.transcription, data.translation);
+                            log(`🎉 ¡ÉXITO! Transcripción válida recibida`);
+                        } else {
+                            log('⚠️ Transcripción vacía - intenta hablar más claro y fuerte');
+                        }
+                    } else if (data.type === 'error') {
+                        log(`❌ Error: ${data.message}`);
+                    }
+                };
+                
+                websocket.onerror = (error) => {
+                    log(`❌ Error WebSocket: ${error}`);
+                };
+                
+                websocket.onclose = () => {
+                    log('🔌 WebSocket cerrado');
+                    document.getElementById('wsStatus').textContent = 'Desconectado';
+                };
+                
+            } catch (error) {
+                log(`❌ Error conectando WebSocket: ${error}`);
+            }
+        };
+
+        // 3. Iniciar Grabación de 10 segundos
+        document.getElementById('startRecord').onclick = async () => {
+            try {
+                log('🎤 Solicitando permisos de micrófono...');
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 44100,  // Mayor calidad
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: false,  // Sin suprimir ruido para mantener voz
+                        autoGainControl: true
+                    } 
+                });
+                
+                log('✅ Permisos concedidos');
+                log('🗣️ HABLA AHORA - Di una frase completa como "Hola mi nombre es Juan"');
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+                
+                let audioChunks = [];
+                secondsRecorded = 0;
+                
+                // Timer para mostrar contador
+                recordingTimer = setInterval(() => {
+                    secondsRecorded++;
+                    document.getElementById('timeCounter').textContent = `${secondsRecorded}s`;
+                    
+                    if (secondsRecorded >= 10) {
+                        mediaRecorder.stop();
+                        clearInterval(recordingTimer);
+                    }
+                }, 1000);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    log('⏹️ Grabación completada, procesando...');
+                    
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    log(`🎵 Audio blob creado: ${audioBlob.size} bytes`);
+                    
+                    // Convertir a base64
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64 = reader.result.split(',')[1];
+                        const message = {
+                            type: 'audio_chunk',
+                            chunk_id: `final_${Date.now()}`,
+                            audio_data: base64
+                        };
+                        
+                        if (websocket && websocket.readyState === WebSocket.OPEN) {
+                            websocket.send(JSON.stringify(message));
+                            log(`📤 Enviado audio completo: ${base64.length} caracteres`);
+                            log('⏳ Esperando transcripción...');
+                        }
+                    };
+                    reader.readAsDataURL(audioBlob);
+                    
+                    // Limpiar
+                    stream.getTracks().forEach(track => track.stop());
+                    document.getElementById('recStatus').textContent = 'Procesando...';
+                    document.getElementById('stopRecord').disabled = true;
+                };
+                
+                mediaRecorder.start();
+                
+                document.getElementById('recStatus').textContent = 'Grabando (10s)';
+                document.getElementById('startRecord').disabled = true;
+                document.getElementById('stopRecord').disabled = false;
+                
+            } catch (error) {
+                log(`❌ Error iniciando grabación: ${error}`);
+            }
+        };
+
+        // 4. Detener manualmente
+        document.getElementById('stopRecord').onclick = () => {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                clearInterval(recordingTimer);
+                log('⏹️ Grabación detenida manualmente');
+            }
+        };
+    </script>
+</body>
+</html>

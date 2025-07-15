@@ -106,3 +106,81 @@ class AudioExtractor:
         except Exception as e:
             logging.error(f"Error getting video info: {e}")
             raise Exception(f"Error getting video info: {e}")
+    
+    def get_audio_info(self, audio_path: str) -> Dict:
+        """Obtiene información de un archivo de audio usando FFprobe"""
+        try:
+            logging.info(f"Getting audio info for {audio_path}")
+            
+            # Usar ffprobe para obtener información del archivo
+            probe = ffmpeg.probe(audio_path)
+            
+            # Obtener información del audio
+            audio_info = next(
+                (stream for stream in probe['streams'] 
+                 if stream['codec_type'] == 'audio'), None
+            )
+            
+            if not audio_info:
+                raise Exception("No audio stream found in file")
+            
+            duration = float(probe['format']['duration'])
+            size = int(probe['format']['size'])
+            
+            return {
+                'duration': duration,
+                'size': size,
+                'audio_codec': audio_info['codec_name'],
+                'sample_rate': int(audio_info.get('sample_rate', 0)),
+                'channels': int(audio_info.get('channels', 1)),
+                'bitrate': int(audio_info.get('bit_rate', 0)) if audio_info.get('bit_rate') else None
+            }
+            
+        except Exception as e:
+            logging.error(f"Error getting audio info: {e}")
+            raise Exception(f"Error getting audio info: {e}")
+
+    async def process_audio_file(self, 
+                                audio_path: str, 
+                                output_path: str,
+                                sample_rate: int = 16000) -> str:
+        """Procesa un archivo de audio para asegurar formato compatible con Whisper"""
+        try:
+            logging.info(f"Processing audio file {audio_path}")
+            
+            # Verificar que el archivo de entrada existe
+            if not os.path.exists(audio_path):
+                raise Exception(f"Audio file not found: {audio_path}")
+            
+            # Si el archivo ya está en formato WAV, podemos copiarlo o convertirlo para asegurar compatibilidad
+            try:
+                import subprocess
+                cmd = [
+                    'ffmpeg', '-y',  # Overwrite output
+                    '-i', audio_path,
+                    '-acodec', 'pcm_s16le',  # PCM 16-bit
+                    '-ar', str(sample_rate),  # Sample rate
+                    '-ac', '1',              # Mono
+                    '-loglevel', 'error',    # Reduce logging
+                    output_path
+                ]
+                
+                logging.info(f"Running FFmpeg command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                
+                if result.returncode == 0:
+                    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                        logging.info(f"Audio processed successfully: {output_path}")
+                        return output_path
+                    else:
+                        raise Exception("FFmpeg completed but output file is empty or missing")
+                else:
+                    logging.error(f"FFmpeg stderr: {result.stderr}")
+                    raise Exception(f"FFmpeg failed with code {result.returncode}: {result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                raise Exception("FFmpeg timeout - audio file too long or processing too slow")
+                
+        except Exception as e:
+            logging.error(f"Error processing audio file: {e}")
+            raise Exception(f"Error processing audio file: {e}")

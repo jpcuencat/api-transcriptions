@@ -239,6 +239,89 @@ class FileValidator:
         
         return validation_result
 
+    @staticmethod
+    async def validate_audio_file(audio_file, settings) -> dict:
+        """
+        Validación completa de archivo de audio.
+        
+        Args:
+            audio_file: UploadFile de FastAPI
+            settings: Configuración de la aplicación
+            
+        Returns:
+            dict: Resultado de validación con detalles
+        """
+        from fastapi import HTTPException
+        
+        validation_result = {
+            'valid': True,
+            'errors': [],
+            'warnings': [],
+            'file_info': {}
+        }
+        
+        # Validar extensión de audio
+        if not FileValidator.validate_file_extension(audio_file.filename, settings.ALLOWED_AUDIO_EXTENSIONS):
+            validation_result['valid'] = False
+            validation_result['errors'].append({
+                "error_code": "INVALID_AUDIO_EXTENSION",
+                "detail": f"Audio file extension not supported. Allowed: {', '.join(settings.ALLOWED_AUDIO_EXTENSIONS)}",
+                "suggestions": [
+                    "Convert your audio to a supported format (MP3, WAV, FLAC, AAC, OGG, M4A, WMA)",
+                    "Check that your file has the correct extension"
+                ]
+            })
+        
+        # Validar seguridad del nombre
+        if not FileValidator.validate_filename_security(audio_file.filename):
+            validation_result['valid'] = False
+            validation_result['errors'].append({
+                "error_code": "UNSAFE_FILENAME", 
+                "detail": "Filename contains unsafe characters",
+                "suggestions": ["Rename your file with only letters, numbers, dots, and dashes"]
+            })
+        
+        # Validar tamaño
+        content = await audio_file.read()
+        file_size = len(content)
+        await audio_file.seek(0)  # Reset pointer
+        
+        if not FileValidator.validate_file_size(file_size, settings.MAX_FILE_SIZE_MB):
+            validation_result['valid'] = False
+            validation_result['errors'].append({
+                "error_code": "FILE_TOO_LARGE",
+                "detail": f"File size ({file_size / 1024 / 1024:.1f}MB) exceeds maximum allowed size of {settings.MAX_FILE_SIZE_MB}MB",
+                "suggestions": [
+                    "Compress your audio file",
+                    "Upload a shorter audio segment",
+                    "Reduce audio quality/bitrate"
+                ]
+            })
+        
+        # Advertencias para archivos vacíos
+        if file_size == 0:
+            validation_result['warnings'].append({
+                "warning_code": "EMPTY_FILE",
+                "detail": "File appears to be empty",
+                "suggestions": ["Ensure your audio file has content"]
+            })
+        
+        # Validar tipo MIME de audio
+        if audio_file.content_type and not audio_file.content_type.startswith('audio/'):
+            validation_result['warnings'].append({
+                "warning_code": "UNEXPECTED_CONTENT_TYPE",
+                "detail": f"Content type '{audio_file.content_type}' is not recognized as audio",
+                "suggestions": ["Ensure you're uploading an audio file"]
+            })
+        
+        validation_result['file_info'] = {
+            'filename': audio_file.filename,
+            'size': file_size,
+            'content_type': audio_file.content_type
+        }
+        
+        return validation_result
+
 class TranscriptionRequest(BaseModel):
     language: Optional[str] = Field(default="auto", description="Language code or 'auto' for detection")
     model_size: Optional[str] = Field(default="base", description="Whisper model size")

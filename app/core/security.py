@@ -85,6 +85,37 @@ class SecurityManager:
         
         return True
     
+    async def check_user_limits(self, client_ip: str, operation_type: str = "general") -> bool:
+        """
+        Verifica límites específicos del usuario para operaciones de tiempo real
+        """
+        current_time = time.time()
+        
+        # Para sesiones de tiempo real, usar límites más estrictos
+        max_sessions_per_hour = 10 if operation_type == "realtime_session" else 60
+        
+        # Verificar rate limit para esta IP y operación
+        limit_key = f"{client_ip}_{operation_type}"
+        if limit_key in self.rate_limits:
+            requests = self.rate_limits[limit_key]
+            recent_requests = [req_time for req_time in requests if current_time - req_time < 3600]
+            
+            if len(recent_requests) >= max_sessions_per_hour:
+                logging.warning(f"User limit exceeded for IP {client_ip}, operation: {operation_type}")
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"User limit exceeded. Maximum {max_sessions_per_hour} {operation_type} operations per hour."
+                )
+            
+            self.rate_limits[limit_key] = recent_requests + [current_time]
+        else:
+            self.rate_limits[limit_key] = [current_time]
+        
+        # Limpiar límites antiguos
+        self._cleanup_rate_limits(current_time)
+        
+        return True
+    
     def _cleanup_rate_limits(self, current_time: float) -> None:
         """Limpia entradas de rate limit antiguas"""
         for ip in list(self.rate_limits.keys()):

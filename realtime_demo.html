@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcripción en Tiempo Real - Micrófono</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .start-btn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .start-btn:hover {
+            background-color: #45a049;
+        }
+        .stop-btn {
+            background-color: #f44336;
+            color: white;
+        }
+        .stop-btn:hover {
+            background-color: #da190b;
+        }
+        .pause-btn {
+            background-color: #ff9800;
+            color: white;
+        }
+        .pause-btn:hover {
+            background-color: #e68900;
+        }
+        .settings {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        .setting-group {
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        select, input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .transcription-area {
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            background-color: #fafafa;
+            margin-bottom: 20px;
+        }
+        .transcription-chunk {
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: white;
+            border-left: 4px solid #007bff;
+            border-radius: 3px;
+        }
+        .translation-chunk {
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: #e7f3ff;
+            border-left: 4px solid #28a745;
+            border-radius: 3px;
+        }
+        .timestamp {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .audio-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        .audio-indicator.recording {
+            background-color: #ff0000;
+            animation: pulse 1s infinite;
+        }
+        .audio-indicator.idle {
+            background-color: #cccccc;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .info-box {
+            background-color: #e7f3ff;
+            border: 1px solid #bee5eb;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .info-box h3 {
+            margin-top: 0;
+            color: #0c5460;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Transcripción en Tiempo Real</h1>
+        
+        <div class="info-box">
+            <h3>¿Cómo funciona?</h3>
+            <p>
+                Esta aplicación captura audio de tu micrófono en tiempo real y lo transcribe automáticamente.
+                También puede traducir la transcripción al idioma que elijas.
+            </p>
+            <p>
+                <strong>Instrucciones:</strong>
+                1. Configura el idioma y traducción
+                2. Haz clic en "Iniciar Sesión"
+                3. Permite el acceso al micrófono
+                4. ¡Comienza a hablar!
+            </p>
+        </div>
+
+        <div class="settings">
+            <div class="setting-group">
+                <label for="language">Idioma de entrada:</label>
+                <select id="language">
+                    <option value="auto">Detección automática</option>
+                    <option value="es">Español</option>
+                    <option value="en">Inglés</option>
+                    <option value="fr">Francés</option>
+                    <option value="de">Alemán</option>
+                    <option value="it">Italiano</option>
+                    <option value="pt">Portugués</option>
+                </select>
+            </div>
+            
+            <div class="setting-group">
+                <label for="translateTo">Traducir a:</label>
+                <select id="translateTo">
+                    <option value="">Sin traducción</option>
+                    <option value="es">Español</option>
+                    <option value="en">Inglés</option>
+                    <option value="fr">Francés</option>
+                    <option value="de">Alemán</option>
+                    <option value="it">Italiano</option>
+                    <option value="pt">Portugués</option>
+                </select>
+            </div>
+            
+            <div class="setting-group">
+                <label for="modelSize">Modelo Whisper:</label>
+                <select id="modelSize">
+                    <option value="tiny">Tiny (Rápido)</option>
+                    <option value="base" selected>Base (Recomendado)</option>
+                    <option value="small">Small (Preciso)</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="status" class="status connecting">
+            <span class="audio-indicator idle" id="audioIndicator"></span>
+            Listo para iniciar...
+        </div>
+
+        <div class="controls">
+            <button id="startBtn" class="start-btn">🎤 Crear Sesión e Iniciar</button>
+            <button id="pauseBtn" class="pause-btn" disabled>⏸️ Pausar</button>
+            <button id="stopBtn" class="stop-btn" disabled>⏹️ Detener</button>
+            <button id="clearBtn" class="pause-btn">🗑️ Limpiar</button>
+        </div>
+
+        <div class="transcription-area" id="transcriptionArea">
+            <p style="text-align: center; color: #666;">
+                Haz clic en "🎤 Crear Sesión e Iniciar" para comenzar la transcripción en tiempo real...
+            </p>
+        </div>
+
+        <div class="info-box">
+            <h3>Estado de la sesión:</h3>
+            <p id="sessionInfo">No hay sesión activa - Haz clic en "Crear Sesión e Iniciar" para empezar</p>
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let mediaRecorder = null;
+        let audioContext = null;
+        let sessionId = null;
+        let isRecording = false;
+        let isPaused = false;
+
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const status = document.getElementById('status');
+        const audioIndicator = document.getElementById('audioIndicator');
+        const transcriptionArea = document.getElementById('transcriptionArea');
+        const sessionInfo = document.getElementById('sessionInfo');
+
+        // Configuración
+        const API_BASE = 'http://localhost:8000/api/v1';
+        const WS_BASE = 'ws://localhost:8000/api/v1';
+
+        // Event listeners
+        startBtn.addEventListener('click', startSession);
+        pauseBtn.addEventListener('click', pauseSession);
+        stopBtn.addEventListener('click', stopSession);
+        clearBtn.addEventListener('click', clearTranscription);
+
+        async function startSession() {
+            try {
+                updateStatus('Creando sesión...', 'connecting');
+                
+                // Crear sesión
+                const sessionResponse = await fetch(`${API_BASE}/realtime/create-session`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        language: document.getElementById('language').value,
+                        model_size: document.getElementById('modelSize').value,
+                        translate_to: document.getElementById('translateTo').value || null
+                    })
+                });
+
+                if (!sessionResponse.ok) {
+                    throw new Error('Error creando sesión');
+                }
+
+                const session = await sessionResponse.json();
+                sessionId = session.session_id;
+                
+                updateSessionInfo(session);
+                updateStatus('Conectando WebSocket...', 'connecting');
+
+                // Conectar WebSocket
+                websocket = new WebSocket(`${WS_BASE}/realtime/ws/${sessionId}`);
+                
+                websocket.onopen = function() {
+                    updateStatus('Solicitando acceso al micrófono...', 'connecting');
+                    startMicrophone();
+                };
+
+                websocket.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    handleWebSocketMessage(data);
+                };
+
+                websocket.onclose = function() {
+                    updateStatus('Conexión cerrada', 'error');
+                    resetUI();
+                };
+
+                websocket.onerror = function(error) {
+                    updateStatus('Error de conexión', 'error');
+                    console.error('WebSocket error:', error);
+                };
+
+            } catch (error) {
+                updateStatus(`Error: ${error.message}`, 'error');
+                console.error('Error starting session:', error);
+            }
+        }
+
+        async function startMicrophone() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                        sampleRate: 16000
+                    } 
+                });
+
+                audioContext = new AudioContext({ sampleRate: 16000 });
+                const source = audioContext.createMediaStreamSource(stream);
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+
+                let audioChunks = [];
+                let chunkCounter = 0;
+
+                mediaRecorder.ondataavailable = function(event) {
+                    if (event.data.size > 0 && !isPaused) {
+                        audioChunks.push(event.data);
+                        
+                        // Procesar chunk cada 2 segundos (en lugar de 3)
+                        if (audioChunks.length >= 2) {
+                            processAudioChunk(audioChunks, chunkCounter++);
+                            audioChunks = [];
+                        }
+                    }
+                };
+
+                mediaRecorder.start(1000); // Chunk cada 1 segundo
+                isRecording = true;
+                
+                updateStatus('🎤 Grabando... ¡Habla ahora!', 'connected');
+                audioIndicator.className = 'audio-indicator recording';
+                
+                startBtn.disabled = true;
+                pauseBtn.disabled = false;
+                stopBtn.disabled = false;
+
+            } catch (error) {
+                updateStatus(`Error accediendo al micrófono: ${error.message}`, 'error');
+                console.error('Microphone error:', error);
+            }
+        }
+
+        async function processAudioChunk(audioChunks, chunkId) {
+            if (!websocket || audioChunks.length === 0) return;
+
+            try {
+                // Combinar chunks de audio
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                
+                // Convertir a base64
+                const reader = new FileReader();
+                reader.onload = function() {
+                    const base64Audio = reader.result.split(',')[1];
+                    
+                    // Enviar por WebSocket
+                    websocket.send(JSON.stringify({
+                        type: 'audio_chunk',
+                        chunk_id: `chunk_${chunkId}`,
+                        audio_data: base64Audio
+                    }));
+                };
+                reader.readAsDataURL(audioBlob);
+
+            } catch (error) {
+                console.error('Error processing audio chunk:', error);
+            }
+        }
+
+        function handleWebSocketMessage(data) {
+            switch (data.type) {
+                case 'connection_established':
+                    console.log('WebSocket connected:', data);
+                    break;
+                    
+                case 'transcription_result':
+                    addTranscription(data);
+                    break;
+                    
+                case 'no_transcription':
+                    console.log('No transcription:', data.reason);
+                    // Mostrar también estos mensajes en la interfaz para debug
+                    const noTranscriptionDiv = document.createElement('div');
+                    const timestamp = new Date().toLocaleTimeString();
+                    noTranscriptionDiv.innerHTML = `
+                        <div class="timestamp">${timestamp} - Chunk: ${data.chunk_id}</div>
+                        <div style="padding: 8px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 3px; margin-bottom: 10px;">
+                            <em>⚠️ ${data.reason}</em>
+                        </div>
+                    `;
+                    transcriptionArea.appendChild(noTranscriptionDiv);
+                    transcriptionArea.scrollTop = transcriptionArea.scrollHeight;
+                    break;
+                    
+                case 'session_info':
+                    updateSessionInfo(data.session);
+                    break;
+                    
+                case 'error':
+                    updateStatus(`Error: ${data.message}`, 'error');
+                    break;
+                    
+                case 'session_closed':
+                    updateStatus('Sesión cerrada', 'connecting');
+                    addFinalTranscription(data);
+                    resetUI();
+                    break;
+                    
+                default:
+                    console.log('Unknown message type:', data.type);
+            }
+        }
+
+        function addTranscription(data) {
+            const chunk = document.createElement('div');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            // Mostrar incluso transcripciones vacías para debug
+            const transcriptionText = data.transcription || '[Sin transcripción]';
+            const translationText = data.translation || '';
+            
+            chunk.innerHTML = `
+                <div class="timestamp">${timestamp} - Chunk: ${data.chunk_id}</div>
+                <div class="transcription-chunk">
+                    <strong>Transcripción:</strong> ${transcriptionText}
+                    ${data.detected_language ? `<br><em>Idioma detectado: ${data.detected_language}</em>` : ''}
+                    ${data.processing_time ? `<br><em>Tiempo de procesamiento: ${data.processing_time.toFixed(2)}s</em>` : ''}
+                </div>
+                ${translationText ? `
+                <div class="translation-chunk">
+                    <strong>Traducción:</strong> ${translationText}
+                </div>
+                ` : ''}
+            `;
+            
+            transcriptionArea.appendChild(chunk);
+            transcriptionArea.scrollTop = transcriptionArea.scrollHeight;
+        }
+
+        function addFinalTranscription(data) {
+            if (data.final_transcription) {
+                const finalDiv = document.createElement('div');
+                finalDiv.innerHTML = `
+                    <div style="border-top: 2px solid #007bff; padding-top: 15px; margin-top: 20px;">
+                        <h3>📄 Transcripción Completa:</h3>
+                        <div class="transcription-chunk">${data.final_transcription}</div>
+                        ${data.final_translation ? `
+                        <h3>🌍 Traducción Completa:</h3>
+                        <div class="translation-chunk">${data.final_translation}</div>
+                        ` : ''}
+                        <p><em>Total de chunks: ${data.total_chunks} | Duración: ${data.total_duration.toFixed(2)}s</em></p>
+                    </div>
+                `;
+                transcriptionArea.appendChild(finalDiv);
+                transcriptionArea.scrollTop = transcriptionArea.scrollHeight;
+            }
+        }
+
+        function pauseSession() {
+            if (websocket && !isPaused) {
+                isPaused = true;
+                websocket.send(JSON.stringify({ type: 'pause' }));
+                updateStatus('⏸️ Pausado', 'connecting');
+                audioIndicator.className = 'audio-indicator idle';
+                pauseBtn.textContent = '▶️ Reanudar';
+            } else if (websocket && isPaused) {
+                isPaused = false;
+                websocket.send(JSON.stringify({ type: 'resume' }));
+                updateStatus('🎤 Grabando... ¡Habla ahora!', 'connected');
+                audioIndicator.className = 'audio-indicator recording';
+                pauseBtn.textContent = '⏸️ Pausar';
+            }
+        }
+
+        function stopSession() {
+            if (websocket) {
+                websocket.send(JSON.stringify({ type: 'close' }));
+            }
+            
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            
+            resetUI();
+        }
+
+        function resetUI() {
+            isRecording = false;
+            isPaused = false;
+            
+            startBtn.disabled = false;
+            pauseBtn.disabled = true;
+            stopBtn.disabled = true;
+            pauseBtn.textContent = '⏸️ Pausar';
+            
+            audioIndicator.className = 'audio-indicator idle';
+            
+            if (websocket) {
+                websocket.close();
+                websocket = null;
+            }
+            
+            if (mediaRecorder) {
+                mediaRecorder = null;
+            }
+            
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+        }
+
+        function clearTranscription() {
+            transcriptionArea.innerHTML = `
+                <p style="text-align: center; color: #666;">
+                    La transcripción aparecerá aquí en tiempo real...
+                </p>
+            `;
+        }
+
+        function updateStatus(message, type) {
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        function updateSessionInfo(session) {
+            sessionInfo.innerHTML = `
+                <strong>ID:</strong> ${session.session_id}<br>
+                <strong>Estado:</strong> ${session.status}<br>
+                <strong>Idioma:</strong> ${session.language}<br>
+                <strong>Traducir a:</strong> ${session.translate_to || 'No'}<br>
+                <strong>Chunks procesados:</strong> ${session.total_chunks || 0}<br>
+                <strong>Duración total:</strong> ${session.total_duration ? session.total_duration.toFixed(2) + 's' : '0s'}
+            `;
+        }
+
+        // Verificar soporte del navegador
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            updateStatus('Tu navegador no soporta captura de audio', 'error');
+            startBtn.disabled = true;
+        }
+    </script>
+</body>
+</html>

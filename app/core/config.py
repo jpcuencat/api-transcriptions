@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     TEMP_DIR: str = "./temp"
     SRT_TEMP_DIR: str = "./temp/srt"
     ALLOWED_EXTENSIONS: list = [".mp4", ".avi", ".mov", ".mkv", ".webm"]
+    ALLOWED_AUDIO_EXTENSIONS: list = [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma"]
     CLEANUP_TEMP_FILES: bool = True
     
     # Whisper Configuration

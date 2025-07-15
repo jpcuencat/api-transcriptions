@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Final - CORREGIDO</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f0f2f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            padding: 12px 24px;
+            margin: 5px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        .start { background-color: #4CAF50; color: white; }
+        .stop { background-color: #f44336; color: white; }
+        .start:disabled, .stop:disabled { 
+            background-color: #ccc; 
+            cursor: not-allowed; 
+        }
+        .logs {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin: 15px 0;
+            border: 1px solid #e9ecef;
+        }
+        .results {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            border: 1px solid #bbdefb;
+        }
+        .alert {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        .status-bar {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #e9ecef;
+        }
+        .transcription-item {
+            background: #f1f8e9;
+            padding: 10px;
+            margin: 8px 0;
+            border-radius: 4px;
+            border-left: 4px solid #4caf50;
+        }
+        .translation-item {
+            background: #e8f5e8;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-style: italic;
+            border-left: 4px solid #2196f3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Test Final - Transcripción Real (CORREGIDO)</h1>
+        
+        <div class="alert">
+            <strong>🎯 IMPORTANTE:</strong> 
+            <ul>
+                <li><strong>Habla MUY CLARO y FUERTE</strong> al micrófono</li>
+                <li>Di frases completas: <em>"Hola, mi nombre es Juan y estoy probando la transcripción"</em></li>
+                <li>Mantén <strong>5-10 segundos</strong> de audio continuo</li>
+                <li>El micrófono debe estar <strong>cerca de tu boca</strong></li>
+            </ul>
+        </div>
+        
+        <div style="text-align: center; margin: 20px 0;">
+            <button id="createSession" class="start">1️⃣ Crear Sesión</button>
+            <button id="connectWS" class="start" disabled>2️⃣ Conectar WebSocket</button>
+            <button id="startRecord" class="start" disabled>3️⃣ Grabar Audio</button>
+            <button id="stopRecord" class="stop" disabled>4️⃣ Detener</button>
+        </div>
+
+        <div class="status-bar">
+            <strong>📊 Estado del Sistema:</strong><br>
+            <strong>Session ID:</strong> <span id="sessionId">❌ No creada</span><br>
+            <strong>WebSocket:</strong> <span id="wsStatus">❌ Desconectado</span><br>
+            <strong>Grabación:</strong> <span id="recStatus">⏹️ Detenida</span><br>
+            <strong>Tiempo:</strong> <span id="timeCounter">0s</span>
+        </div>
+
+        <div class="logs" id="logs">
+            [INFO] Test final iniciado - esperando interacción del usuario...\n
+        </div>
+
+        <div class="results">
+            <strong>🎯 Transcripciones y Traducciones:</strong>
+            <div id="transcriptions">
+                <em>Aquí aparecerán las transcripciones en tiempo real...</em>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1';
+        const WS_BASE = 'ws://localhost:8000/api/v1';
+        
+        // Variables globales
+        let sessionId = null;
+        let websocket = null;
+        let mediaRecorder = null;
+        let mediaStream = null;
+        let recordingTimer = null;
+        let secondsRecorded = 0;
+
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(`[${timestamp}] ${message}`);
+        }
+
+        function addTranscription(transcription, translation = null) {
+            const container = document.getElementById('transcriptions');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            const transcriptionDiv = document.createElement('div');
+            transcriptionDiv.className = 'transcription-item';
+            transcriptionDiv.innerHTML = `
+                <strong>[${timestamp}] 🗣️ Transcripción:</strong><br>
+                "${transcription}"
+            `;
+            
+            container.appendChild(transcriptionDiv);
+            
+            if (translation && translation.trim()) {
+                const translationDiv = document.createElement('div');
+                translationDiv.className = 'translation-item';
+                translationDiv.innerHTML = `
+                    <strong>🌐 Traducción:</strong> "${translation}"
+                `;
+                container.appendChild(translationDiv);
+            }
+            
+            // Scroll automático
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 1. Crear Sesión
+        document.getElementById('createSession').onclick = async () => {
+            try {
+                log('🔄 Creando sesión de transcripción...');
+                const response = await fetch(`${API_BASE}/realtime/create-session`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        language: 'es',
+                        model_size: 'base',  // Usar modelo base (más preciso)
+                        translate_to: 'en'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const session = await response.json();
+                sessionId = session.session_id;
+                
+                document.getElementById('sessionId').textContent = `✅ ${sessionId}`;
+                document.getElementById('createSession').disabled = true;
+                document.getElementById('connectWS').disabled = false;
+                
+                log(`✅ Sesión creada exitosamente: ${sessionId}`);
+            } catch (error) {
+                log(`❌ Error creando sesión: ${error.message}`);
+                console.error('Error:', error);
+            }
+        };
+
+        // 2. Conectar WebSocket
+        document.getElementById('connectWS').onclick = () => {
+            try {
+                log('🔄 Estableciendo conexión WebSocket...');
+                websocket = new WebSocket(`${WS_BASE}/realtime/ws/${sessionId}`);
+                
+                websocket.onopen = () => {
+                    log('✅ WebSocket conectado correctamente');
+                    document.getElementById('wsStatus').textContent = '✅ Conectado';
+                    document.getElementById('connectWS').disabled = true;
+                    document.getElementById('startRecord').disabled = false;
+                };
+                
+                websocket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        log(`📨 Mensaje WebSocket recibido: ${data.type}`);
+                        
+                        if (data.type === 'transcription') {
+                            log(`📝 Transcripción: "${data.transcription}"`);
+                            if (data.translation) {
+                                log(`🌐 Traducción: "${data.translation}"`);
+                            }
+                            
+                            if (data.transcription && data.transcription.trim()) {
+                                addTranscription(data.transcription, data.translation);
+                                log(`🎉 ¡ÉXITO! Transcripción procesada correctamente`);
+                            } else {
+                                log('⚠️ Transcripción vacía - intenta hablar más claro');
+                            }
+                        } else if (data.type === 'error') {
+                            log(`❌ Error del servidor: ${data.message || data.error}`);
+                        } else {
+                            log(`ℹ️ Mensaje desconocido: ${JSON.stringify(data)}`);
+                        }
+                    } catch (parseError) {
+                        log(`❌ Error parseando mensaje WebSocket: ${parseError.message}`);
+                        log(`📄 Mensaje raw: ${event.data}`);
+                    }
+                };
+                
+                websocket.onerror = (error) => {
+                    log(`❌ Error en WebSocket: ${error.message || 'Error desconocido'}`);
+                    console.error('WebSocket error:', error);
+                };
+                
+                websocket.onclose = (event) => {
+                    log(`🔌 WebSocket cerrado (código: ${event.code})`);
+                    document.getElementById('wsStatus').textContent = '❌ Desconectado';
+                };
+                
+            } catch (error) {
+                log(`❌ Error estableciendo WebSocket: ${error.message}`);
+                console.error('Error:', error);
+            }
+        };
+
+        // 3. Iniciar Grabación
+        document.getElementById('startRecord').onclick = async () => {
+            try {
+                log('🎤 Solicitando acceso al micrófono...');
+                
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 44100,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: false,  // Mantener la voz natural
+                        autoGainControl: true
+                    } 
+                });
+                
+                log('✅ Permisos de micrófono concedidos');
+                log('🗣️ ¡HABLA AHORA! Di: "Hola, mi nombre es Juan y estoy probando la transcripción"');
+                
+                mediaRecorder = new MediaRecorder(mediaStream, {
+                    mimeType: 'audio/webm;codecs=opus'
+                });
+                
+                let audioChunks = [];
+                secondsRecorded = 0;
+                
+                // Actualizar contador cada segundo
+                recordingTimer = setInterval(() => {
+                    secondsRecorded++;
+                    document.getElementById('timeCounter').textContent = `${secondsRecorded}s`;
+                    
+                    // Auto-stop después de 10 segundos
+                    if (secondsRecorded >= 10) {
+                        document.getElementById('stopRecord').click();
+                    }
+                }, 1000);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                        log(`🎵 Chunk de audio capturado: ${event.data.size} bytes`);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    log('⏹️ Grabación finalizada, procesando audio...');
+                    
+                    if (audioChunks.length === 0) {
+                        log('❌ No se capturó audio');
+                        return;
+                    }
+                    
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    log(`📦 Audio blob creado: ${audioBlob.size} bytes`);
+                    
+                    // Convertir a base64 y enviar
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        try {
+                            const base64 = reader.result.split(',')[1];
+                            const message = {
+                                type: 'audio_chunk',
+                                chunk_id: `real_audio_${Date.now()}`,
+                                audio_data: base64
+                            };
+                            
+                            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                                websocket.send(JSON.stringify(message));
+                                log(`📤 Audio enviado al servidor: ${base64.length} caracteres base64`);
+                                log('⏳ Esperando respuesta del servidor...');
+                            } else {
+                                log('❌ WebSocket no está conectado');
+                            }
+                        } catch (error) {
+                            log(`❌ Error enviando audio: ${error.message}`);
+                        }
+                    };
+                    
+                    reader.onerror = (error) => {
+                        log(`❌ Error leyendo archivo: ${error}`);
+                    };
+                    
+                    reader.readAsDataURL(audioBlob);
+                    
+                    // Limpiar estado
+                    cleanupRecording();
+                };
+                
+                // Iniciar grabación
+                mediaRecorder.start();
+                
+                // Actualizar UI
+                document.getElementById('recStatus').textContent = '🔴 Grabando...';
+                document.getElementById('startRecord').disabled = true;
+                document.getElementById('stopRecord').disabled = false;
+                
+            } catch (error) {
+                log(`❌ Error iniciando grabación: ${error.message}`);
+                console.error('Error:', error);
+                cleanupRecording();
+            }
+        };
+
+        // 4. Detener Grabación
+        document.getElementById('stopRecord').onclick = () => {
+            log('🛑 Deteniendo grabación manualmente...');
+            
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            
+            cleanupRecording();
+        };
+
+        function cleanupRecording() {
+            // Limpiar timer
+            if (recordingTimer) {
+                clearInterval(recordingTimer);
+                recordingTimer = null;
+            }
+            
+            // Limpiar stream
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            
+            // Resetear UI
+            document.getElementById('recStatus').textContent = '⏹️ Detenida';
+            document.getElementById('stopRecord').disabled = true;
+            document.getElementById('startRecord').disabled = false;
+            
+            log('🧹 Recursos de grabación liberados');
+        }
+
+        // Debug: Log inicial
+        log('🚀 Interfaz cargada - Sistema listo para usar');
+        log('📋 Paso 1: Haz clic en "Crear Sesión"');
+    </script>
+</body>
+</html>

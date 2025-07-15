@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse
 
 from app.models.schemas import (
     TranscriptionRequest, TranscriptionResult, ErrorResponse,
-    URLTranscriptionRequest, URLValidationResult, VideoUrlInfo
+    URLTranscriptionRequest, URLValidationResult, VideoUrlInfo,
+    AudioTranscriptionRequest
 )
 from app.utils.validators import FileValidator
 from app.utils.file_handler import FileHandler
@@ -472,6 +473,122 @@ async def get_supported_sites():
         "documentation": "https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md"
     }
 
+@router.post("/transcribe-audio", response_model=TranscriptionResult)
+async def transcribe_audio_file(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    audio_file: UploadFile = File(...),
+    language: Optional[str] = Form("auto"),
+    model_size: Optional[str] = Form("base"),
+    translate_to: Optional[str] = Form(None),
+    quality_evaluation: Optional[bool] = Form(True),
+    user_info: dict = Depends(security_manager.verify_api_key)
+):
+    """
+    Transcribe audio file and optionally translate to target language
+    
+    - **audio_file**: Audio file (.mp3, .wav, .flac, .aac, .ogg, .m4a, .wma)
+    - **language**: Language code or 'auto' for detection
+    - **model_size**: Whisper model size (tiny, base, small, medium, large)
+    - **translate_to**: Target language for translation (optional)
+    - **quality_evaluation**: Enable quality evaluation (default: true)
+    """
+    job_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    # Log de parámetros recibidos
+    logging.info(f"Audio endpoint received parameters - language: {language}, model_size: {model_size}, translate_to: {translate_to}")
+    
+    try:
+        # Verificar rate limit
+        await security_manager.check_rate_limit(request)
+        
+        # Validar parámetros
+        if language not in settings.SUPPORTED_LANGUAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported language: {language}. Supported: {list(settings.SUPPORTED_LANGUAGES.keys())}"
+            )
+        
+        if model_size not in transcription_service.get_available_models():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model size: {model_size}. Available: {transcription_service.get_available_models()}"
+            )
+        
+        # Validar parámetros de traducción
+        if translate_to is not None and translate_to.strip() != "" and translate_to not in settings.SUPPORTED_LANGUAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported translation target: {translate_to}. Supported: {list(settings.SUPPORTED_LANGUAGES.keys())}"
+            )
+        
+        # Validar archivo de audio con respuesta detallada
+        validation_result = await file_validator.validate_audio_file(audio_file, settings)
+        
+        if not validation_result['valid']:
+            # Combinar todos los errores en una respuesta estructurada
+            error_details = {
+                "error": "Audio File Validation Failed",
+                "detail": "One or more validation errors occurred",
+                "validation_errors": validation_result['errors'],
+                "timestamp": datetime.now().isoformat()
+            }
+            raise HTTPException(status_code=422, detail=error_details)
+        
+        # Log warnings if any
+        if validation_result['warnings']:
+            logging.warning(f"Audio validation warnings for {audio_file.filename}: {validation_result['warnings']}")
+        
+        # Crear entrada de trabajo
+        job_storage[job_id] = TranscriptionResult(
+            job_id=job_id,
+            status="processing",
+            source_type="audio",
+            created_at=datetime.now()
+        )
+        
+        logging.info(f"Starting audio transcription job {job_id} for user {user_info.get('name')}")
+        
+        # Procesar en background
+        background_tasks.add_task(
+            process_audio_transcription,
+            job_id=job_id,
+            audio_file=audio_file,
+            language=language,
+            model_size=model_size,
+            translate_to=translate_to,
+            quality_evaluation=quality_evaluation,
+            start_time=start_time
+        )
+        
+        return job_storage[job_id]
+        
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logging.error(f"Validation error in audio transcription job: {e}")
+        raise HTTPException(
+            status_code=400, 
+            detail={
+                "error": "Validation Error",
+                "detail": str(e),
+                "error_code": "VALIDATION_FAILED",
+                "suggestions": ["Check file size and format", "Ensure file is a valid audio file"]
+            }
+        )
+    except Exception as e:
+        logging.error(f"Error starting audio transcription job: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error": "Internal Server Error",
+                "detail": f"Failed to start audio transcription: {str(e)}",
+                "error_code": "PROCESSING_ERROR",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
 async def process_video_transcription(
     job_id: str,
     video_file: UploadFile,
@@ -919,3 +1036,134 @@ async def process_url_video_transcription(
             except Exception as cleanup_error:
                 logging.warning(f"Failed to clean up downloaded file {downloaded_file_path}: {cleanup_error}")
 
+async def process_audio_transcription(
+    job_id: str,
+    audio_file: UploadFile,
+    language: str,
+    model_size: str,
+    translate_to: Optional[str],
+    quality_evaluation: bool,
+    start_time: float
+):
+    """Procesa archivo de audio: procesar -> transcripción -> SRT"""
+    try:
+        logging.info(f"Processing audio job {job_id}")
+        
+        # 1. Guardar archivo de audio subido
+        audio_path = await file_handler.save_uploaded_file(audio_file, job_id)
+        
+        # 2. Obtener información del audio
+        audio_info_dict = audio_extractor.get_audio_info(audio_path)
+        from app.models.schemas import AudioInfo
+        audio_info = AudioInfo(**audio_info_dict)
+        job_storage[job_id].audio_info = audio_info
+        
+        # 3. Procesar audio para Whisper (ya está en formato correcto)
+        processed_audio_path = file_handler.generate_audio_path(job_id)
+        await audio_extractor.process_audio_file(audio_path, processed_audio_path)
+        
+        # 4. Transcribir audio
+        logging.info(f"Audio transcription parameters - language: {language}, model_size: {model_size}, translate_to: {translate_to}")
+        
+        transcription_result = await transcription_service.transcribe_audio(
+            audio_path=processed_audio_path, 
+            language=language, 
+            model_size=model_size
+        )
+        
+        job_storage[job_id].transcription_text = transcription_result['text']
+        job_storage[job_id].detected_language = transcription_result['language']
+        
+        # 5. Traducir si es necesario
+        translated_text = None
+        translation_segments = None
+        if (translate_to and 
+            translate_to.strip() and 
+            translate_to.strip() != "" and 
+            translate_to != transcription_result.get('language')):
+            
+            translated_text = await translation_service.translate_text(
+                transcription_result['text'], 
+                source_language=transcription_result.get('language', 'auto'),
+                target_language=translate_to
+            )
+            
+            # Traducir segmentos si están disponibles
+            if transcription_result.get('segments'):
+                translation_segments = await translation_service.translate_segments(
+                    transcription_result['segments'],
+                    target_language=translate_to,
+                    source_language=transcription_result.get('language', 'auto')
+                )
+                transcription_result['translation_segments'] = translation_segments
+            
+            job_storage[job_id].translated_text = translated_text
+            job_storage[job_id].target_language = translate_to
+        
+        # 6. Generar SRT
+        srt_path = None
+        if transcription_result.get('segments'):
+            logging.info(f"Found {len(transcription_result['segments'])} segments for SRT generation")
+            srt_filename = f"{job_id}.srt"
+            srt_path = os.path.join(settings.SRT_TEMP_DIR, srt_filename)
+            
+            # Determinar qué segmentos usar para SRT
+            use_translated = (translation_segments is not None and 
+                            translate_to and 
+                            translate_to.strip() and
+                            translate_to.strip() != "")
+            segments_to_use = translation_segments if use_translated else transcription_result['segments']
+            
+            # Verificar que los segmentos tienen los campos necesarios
+            valid_segments = []
+            for i, seg in enumerate(segments_to_use):
+                if isinstance(seg, dict) and 'start' in seg and 'end' in seg and 'text' in seg:
+                    text_to_use = seg.get('translation', seg.get('text', ''))
+                    if text_to_use is None:
+                        text_to_use = ''
+                    valid_segment = {
+                        'start': seg['start'],
+                        'end': seg['end'],
+                        'text': text_to_use.strip(),
+                        'translation': text_to_use.strip() if use_translated else None
+                    }
+                    valid_segments.append(valid_segment)
+            
+            # Generar SRT
+            try:
+                srt_path = subtitle_generator.generate_srt(valid_segments, srt_path, use_translated=use_translated)
+                logging.info(f"SRT generated successfully: {srt_path}")
+            except Exception as srt_error:
+                logging.error(f"Error generating SRT: {srt_error}")
+                srt_path = None
+        
+        job_storage[job_id].srt_file_path = srt_path
+        
+        # 7. Evaluar calidad
+        quality_report = None
+        if quality_evaluation:
+            quality_report = quality_evaluator.evaluate_transcription(
+                transcription_result, audio_info.duration
+            )
+        
+        # 8. Actualizar resultado
+        processing_time = time.time() - start_time
+        
+        job_storage[job_id].status = "completed"
+        job_storage[job_id].quality_report = quality_report
+        job_storage[job_id].processing_time = processing_time
+        job_storage[job_id].completed_at = datetime.now()
+        
+        # Limpiar archivos temporales
+        file_handler.cleanup_job_files(job_id)
+        logging.info(f"Audio transcription job {job_id} completed successfully")
+        
+    except Exception as e:
+        logging.error(f"Audio job {job_id} failed: {e}")
+        job_storage[job_id].status = "failed"
+        job_storage[job_id].error = str(e)
+        job_storage[job_id].completed_at = datetime.now()
+        
+        # Limpiar archivos en caso de error
+        file_handler.cleanup_job_files(job_id)
+        raise

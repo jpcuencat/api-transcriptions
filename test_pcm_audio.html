@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Transcripción - Audio PCM</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .start { background-color: #4CAF50; color: white; }
+        .stop { background-color: #f44336; color: white; }
+        .logs {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        .results {
+            background: #e7f3ff;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Transcripción - Audio PCM Raw</h1>
+        
+        <div>
+            <button id="createSession" class="start">1. Crear Sesión</button>
+            <button id="connectWS" class="start" disabled>2. Conectar WebSocket</button>
+            <button id="startRecord" class="start" disabled>3. Iniciar Grabación PCM</button>
+            <button id="stopRecord" class="stop" disabled>4. Detener</button>
+        </div>
+
+        <div>
+            <strong>Session ID:</strong> <span id="sessionId">No creada</span><br>
+            <strong>WebSocket:</strong> <span id="wsStatus">Desconectado</span><br>
+            <strong>Grabación:</strong> <span id="recStatus">Detenida</span>
+        </div>
+
+        <div class="logs" id="logs">
+            [LOG] Test con audio PCM directo...
+        </div>
+
+        <div class="results" id="results">
+            <strong>Transcripciones:</strong><br>
+            <div id="transcriptions">No hay transcripciones aún...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1';
+        const WS_BASE = 'ws://localhost:8000/api/v1';
+        
+        let sessionId = null;
+        let websocket = null;
+        let audioContext = null;
+        let mediaRecorder = null;
+        let processor = null;
+        let microphone = null;
+
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(message);
+        }
+
+        function addTranscription(text, translation = null) {
+            const div = document.getElementById('transcriptions');
+            const timestamp = new Date().toLocaleTimeString();
+            div.innerHTML += `<div><strong>[${timestamp}]</strong> ${text}`;
+            if (translation) {
+                div.innerHTML += `<br><em>Traducción: ${translation}</em>`;
+            }
+            div.innerHTML += `</div><br>`;
+        }
+
+        // Convertir Float32Array a Base64
+        function float32ToBase64(buffer) {
+            const bytes = new Uint8Array(buffer.buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        // Convertir Int16Array a Base64
+        function int16ToBase64(buffer) {
+            const bytes = new Uint8Array(buffer.buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        // 1. Crear Sesión
+        document.getElementById('createSession').onclick = async () => {
+            try {
+                log('Creando sesión...');
+                const response = await fetch(`${API_BASE}/realtime/create-session`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        language: 'es',
+                        model_size: 'tiny',
+                        translate_to: 'en'
+                    })
+                });
+                
+                const session = await response.json();
+                sessionId = session.session_id;
+                
+                document.getElementById('sessionId').textContent = sessionId;
+                document.getElementById('createSession').disabled = true;
+                document.getElementById('connectWS').disabled = false;
+                
+                log(`✅ Sesión creada: ${sessionId}`);
+            } catch (error) {
+                log(`❌ Error creando sesión: ${error}`);
+            }
+        };
+
+        // 2. Conectar WebSocket
+        document.getElementById('connectWS').onclick = () => {
+            try {
+                log('Conectando WebSocket...');
+                websocket = new WebSocket(`${WS_BASE}/realtime/ws/${sessionId}`);
+                
+                websocket.onopen = () => {
+                    log('✅ WebSocket conectado');
+                    document.getElementById('wsStatus').textContent = 'Conectado';
+                    document.getElementById('connectWS').disabled = true;
+                    document.getElementById('startRecord').disabled = false;
+                };
+                
+                websocket.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`📨 Mensaje recibido: ${data.type}`);
+                    
+                    if (data.type === 'transcription') {
+                        log(`📝 Transcripción: "${data.transcription}"`);
+                        if (data.transcription && data.transcription.trim()) {
+                            addTranscription(data.transcription, data.translation);
+                        } else {
+                            log('⚠️ Transcripción vacía recibida');
+                        }
+                    } else if (data.type === 'error') {
+                        log(`❌ Error: ${data.message}`);
+                    }
+                };
+                
+                websocket.onerror = (error) => {
+                    log(`❌ Error WebSocket: ${error}`);
+                };
+                
+                websocket.onclose = () => {
+                    log('🔌 WebSocket cerrado');
+                    document.getElementById('wsStatus').textContent = 'Desconectado';
+                };
+                
+            } catch (error) {
+                log(`❌ Error conectando WebSocket: ${error}`);
+            }
+        };
+
+        // 3. Iniciar Grabación PCM
+        document.getElementById('startRecord').onclick = async () => {
+            try {
+                log('Solicitando permisos de micrófono...');
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    } 
+                });
+                
+                log('✅ Permisos concedidos, configurando AudioContext...');
+                
+                // Crear AudioContext para procesar audio raw
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+                
+                microphone = audioContext.createMediaStreamSource(stream);
+                
+                // Crear ScriptProcessorNode para obtener datos PCM
+                const bufferSize = 16384; // Buffer más grande para mejor calidad
+                processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+                
+                let audioBuffer = [];
+                let chunkCounter = 0;
+                
+                processor.onaudioprocess = (event) => {
+                    const inputData = event.inputBuffer.getChannelData(0);
+                    
+                    // Acumular datos de audio
+                    audioBuffer = audioBuffer.concat(Array.from(inputData));
+                    
+                    // Enviar cada 2 segundos (32000 muestras a 16kHz)
+                    if (audioBuffer.length >= 32000) {
+                        chunkCounter++;
+                        
+                        // Tomar exactamente 2 segundos de audio
+                        const chunk = new Float32Array(audioBuffer.slice(0, 32000));
+                        audioBuffer = audioBuffer.slice(32000);
+                        
+                        // Verificar que hay audio (no silencio)
+                        const rms = Math.sqrt(chunk.reduce((sum, val) => sum + val * val, 0) / chunk.length);
+                        log(`🎵 Chunk ${chunkCounter}: ${chunk.length} muestras, RMS: ${rms.toFixed(6)}`);
+                        
+                        if (rms > 0.001) { // Solo enviar si hay audio significativo
+                            // Convertir a Int16 para mejor compatibilidad
+                            const int16Data = new Int16Array(chunk.length);
+                            for (let i = 0; i < chunk.length; i++) {
+                                int16Data[i] = Math.max(-32768, Math.min(32767, chunk[i] * 32767));
+                            }
+                            
+                            const base64 = int16ToBase64(int16Data);
+                            
+                            const message = {
+                                type: 'audio_chunk',
+                                chunk_id: `pcm_${chunkCounter}_${Date.now()}`,
+                                audio_data: base64
+                            };
+                            
+                            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                                websocket.send(JSON.stringify(message));
+                                log(`📤 Enviado chunk PCM ${chunkCounter}: ${base64.length} caracteres, RMS: ${rms.toFixed(6)}`);
+                            }
+                        } else {
+                            log(`🔇 Chunk ${chunkCounter} muy silencioso, omitido (RMS: ${rms.toFixed(6)})`);
+                        }
+                    }
+                };
+                
+                // Conectar el pipeline de audio
+                microphone.connect(processor);
+                processor.connect(audioContext.destination);
+                
+                document.getElementById('recStatus').textContent = 'Grabando (PCM)';
+                document.getElementById('startRecord').disabled = true;
+                document.getElementById('stopRecord').disabled = false;
+                
+                log('🎤 Grabación PCM iniciada - Habla claramente!');
+                
+            } catch (error) {
+                log(`❌ Error iniciando grabación: ${error}`);
+            }
+        };
+
+        // 4. Detener
+        document.getElementById('stopRecord').onclick = () => {
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+                log('⏹️ Processor desconectado');
+            }
+            
+            if (microphone) {
+                microphone.disconnect();
+                microphone = null;
+                log('⏹️ Micrófono desconectado');
+            }
+            
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+                log('⏹️ AudioContext cerrado');
+            }
+            
+            if (websocket) {
+                websocket.close();
+                log('🔌 WebSocket cerrado');
+            }
+            
+            document.getElementById('recStatus').textContent = 'Detenida';
+            document.getElementById('stopRecord').disabled = true;
+            
+            // Reset para nueva prueba
+            setTimeout(() => {
+                location.reload();
+            }, 2000);
+        };
+    </script>
+</body>
+</html>

@@ -16,6 +16,53 @@ class URLTranscriptionRequest(BaseModel):
     quality_evaluation: Optional[bool] = Field(default=True, description="Enable quality evaluation")
     video_quality: Optional[str] = Field(default="medium", description="Video download quality: low, medium, best")
 
+class AudioTranscriptionRequest(BaseModel):
+    language: Optional[str] = Field(default="auto", description="Language code or 'auto' for detection")
+    model_size: Optional[str] = Field(default="base", description="Whisper model size")
+    translate_to: Optional[str] = Field(default=None, description="Target language for translation")
+    quality_evaluation: Optional[bool] = Field(default=True, description="Enable quality evaluation")
+
+class RealTimeTranscriptionRequest(BaseModel):
+    language: Optional[str] = Field(default="auto", description="Language code or 'auto' for detection")
+    model_size: Optional[str] = Field(default="tiny", description="Whisper model size - use 'tiny' for real-time")
+    translate_to: Optional[str] = Field(default=None, description="Target language for real-time translation")
+    chunk_duration: Optional[int] = Field(default=5, description="Audio chunk duration in seconds (1-10)")
+    enable_vad: Optional[bool] = Field(default=True, description="Enable Voice Activity Detection")
+    min_speech_duration: Optional[float] = Field(default=0.5, description="Minimum speech duration to process")
+    silence_timeout: Optional[int] = Field(default=2, description="Silence timeout in seconds")
+
+class RealTimeTranscriptionChunk(BaseModel):
+    chunk_id: str
+    session_id: str
+    audio_data: str  # Base64 encoded audio
+    timestamp: datetime
+    is_final: bool = False
+
+class RealTimeTranscriptionResponse(BaseModel):
+    session_id: str
+    chunk_id: str
+    transcription: str
+    translation: Optional[str] = None
+    detected_language: Optional[str] = None
+    confidence: Optional[float] = None
+    is_final: bool
+    processing_time: float
+    timestamp: datetime
+
+class RealTimeSession(BaseModel):
+    session_id: str
+    status: str  # "active", "paused", "completed", "error"
+    language: str
+    model_size: str
+    translate_to: Optional[str] = None
+    total_chunks: int = 0
+    total_duration: float = 0.0
+    full_transcription: str = ""
+    full_translation: Optional[str] = None
+    created_at: datetime
+    last_activity: datetime
+    error: Optional[str] = None
+
 class TranscriptionSegment(BaseModel):
     id: int
     start: float
@@ -44,6 +91,14 @@ class VideoInfo(BaseModel):
     audio_codec: Optional[str]
     fps: Optional[float]
 
+class AudioInfo(BaseModel):
+    duration: float
+    size: int
+    audio_codec: Optional[str]
+    sample_rate: Optional[int]
+    channels: Optional[int]
+    bitrate: Optional[int]
+
 class VideoUrlInfo(BaseModel):
     title: str
     duration: int
@@ -67,10 +122,11 @@ class URLValidationResult(BaseModel):
 class TranscriptionResult(BaseModel):
     job_id: str
     status: str
-    source_type: Optional[str] = None  # "file" or "url"
+    source_type: Optional[str] = None  # "file", "url", or "audio"
     source_filename: Optional[str] = None  # For file uploads
     source_url: Optional[str] = None  # For URL downloads
     video_info: Optional[VideoInfo] = None
+    audio_info: Optional[AudioInfo] = None  # For audio-only files
     transcription_text: Optional[str] = None
     translated_text: Optional[str] = None  # Field for translation text
     detected_language: Optional[str] = None
@@ -82,7 +138,7 @@ class TranscriptionResult(BaseModel):
     quality_report: Optional[QualityReport] = None
     srt_file_path: Optional[str] = None
     processing_time: Optional[float] = None
-    duration: Optional[float] = None  # Video duration
+    duration: Optional[float] = None  # Audio/Video duration
     error: Optional[str] = None  # Error message if failed
     created_at: datetime
     completed_at: Optional[datetime] = None

@@ -1,11 +1,17 @@
 # API Framework
 fastapi
 uvicorn
+websockets
 
 # Audio/Video Processing
 transformers
 whisper
 yt-dlp
+sounddevice
+numpy
+librosa
+webrtcvad
+scipy
 
 # Data Validation
 pydantic==2.5.0
@@ -19,3 +25,7 @@ aiohttp
 
 # Quality Assessment
 jiwer
+
+# Real-time audio processing
+asyncio
+threading
